@@ -28,5 +28,5 @@ app.use('/api/trips', tripRoutes);
 app.use('/api/bookings', bookingRoutes);
 
 // Start Server
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 1500;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
