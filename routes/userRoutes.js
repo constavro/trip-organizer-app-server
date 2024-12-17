@@ -5,7 +5,35 @@ const Profile = require('../models/Profile');
 const Booking = require('../models/Booking');
 const Trip = require('../models/Trip');
 const authMiddleware = require('../middleware/authMiddleware');
+const { fetchUserProfile } = require('../utils/userUtils');
+const authorizeUser = require('../middleware/userMiddleware');
 const router = express.Router();
+
+// Delete the user and their profile
+router.delete('/:userId', authMiddleware, authorizeUser, async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    // Delete the user's profile
+    const profile = await Profile.findOneAndDelete({ userId });
+    if (!profile) {
+      return res.status(404).json({ message: 'Profile not found' });
+    }
+
+    // Delete the user from the User model
+    const user = await User.findByIdAndDelete(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.status(200).json({
+      message: 'User and profile deleted successfully',
+    });
+  } catch (err) {
+    console.error('Error deleting user and profile:', err);
+    res.status(500).json({ message: 'Error deleting user and profile', error: err.message });
+  }
+});
 
 // Get the user profile, their created trips, and their bookings
 router.get('/:userId', authMiddleware, async (req, res) => {
@@ -13,20 +41,12 @@ router.get('/:userId', authMiddleware, async (req, res) => {
   const { userId } = req.params;
   
   try {
-    const user = await User.findById(userId)
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Find the associated profile
-    const profile = await Profile.findOne({ userId })
-    if (!profile) {
-      return res.status(404).json({ message: 'Profile not found' });
-    }
+    const { user, profile } = await fetchUserProfile(userId);
 
     // Fetch the user's created trips
     const createdTrips = await Trip.find({ host: userId });
+
+    const bookings = await Booking.find({ userId });
 
     // Combine the user's data for viewing
     const userProfile = {
@@ -37,6 +57,7 @@ router.get('/:userId', authMiddleware, async (req, res) => {
       },
       profile,
       createdTrips,
+      bookings
     };
 
     res.status(200).json(userProfile);
@@ -47,16 +68,11 @@ router.get('/:userId', authMiddleware, async (req, res) => {
 });
 
 // Edit logged-in user's profile
-router.put('/:userId', authMiddleware, async (req, res) => {
-  const { userId } = req.params;
+router.put('/:userId', authMiddleware, authorizeUser, async (req, res) => {
+  const { userId } = req.params
   const { ...profileUpdates } = req.body; // Separate user and profile fields
 
   try {
-    // Ensure only the logged-in user can edit their own profile
-    if (req.user.id !== userId) {
-      return res.status(403).json({ message: 'You can only edit your own profile' });
-    }
-
     const user = await User.findById(userId)
 
     // Update the Profile model for other fields
@@ -110,15 +126,11 @@ router.get('/personal-info/:userId', authMiddleware, async (req, res) => {
 });
 
 // Edit logged-in user's personal info
-router.put('/personal-info/:userId', authMiddleware, async (req, res) => {
+router.put('/personal-info/:userId', authMiddleware, authorizeUser, async (req, res) => {
   const { userId } = req.params;
   const { ...personalInfoUpdates } = req.body; // Separate user and profile fields
 
   try {
-    // Ensure only the logged-in user can edit their own profile
-    if (req.user.id !== userId) {
-      return res.status(403).json({ message: 'You can only edit your own profile' });
-    }
 
     // Update the User model for other fields
     const user = await User.findByIdAndUpdate(

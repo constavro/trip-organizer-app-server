@@ -19,12 +19,20 @@ const tripSchema = new mongoose.Schema({
       photos: { type: [String], default: [] }, // Photos for the location
       itineraryDescription: { type: String, required: true }, // Additional details about the place
       transportation: { type: String }, // Mode of transport (e.g., bus, train, flight)
+      coordinates: { // Latitude and longitude for each location
+                lat: { type: Number },
+                lng: { type: Number }
+              },
     },
   ], // List of locations with detailed itinerary
   minParticipants: { type: Number, required: true },
   maxParticipants: { type: Number, required: true },
   price: { type: Number, required: true }, // price per person
-  createdAt: { type: Date, default: Date.now }
-});
+  tags: { type: [String], default: [] }, // Optional tags for categorization
+  participants: { 
+    type: [mongoose.Schema.Types.ObjectId], 
+    default: []
+  },
+}, { timestamps: true });
 
 module.exports = mongoose.model('Trip', tripSchema);

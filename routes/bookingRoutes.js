@@ -55,11 +55,12 @@ router.get('/host/:hostId', authMiddleware, async (req, res) => {
 });
 
 // Accept or decline a booking
-router.put('/:bookingId', async (req, res) => {
+router.put('/:bookingId', authMiddleware, async (req, res) => {
+
   const { bookingId } = req.params;
   const { status } = req.body;
 
-  if (!['accepted', 'declined'].includes(status)) {
+  if (!['accepted', 'declined', 'cancelled'].includes(status)) {
     return res.status(400).json({ message: 'Invalid status' });
   }
 
@@ -72,6 +73,24 @@ router.put('/:bookingId', async (req, res) => {
     booking.status = status;
     await booking.save();
 
+    if (status === 'accepted'){
+
+      const trip = await Trip.findByIdAndUpdate(
+        booking.trip,
+        { $addToSet: { participants: req.user.id } }, // Add user to participants
+        { new: true } // Return updated document
+    );
+    }
+
+    if (status === 'cancelled'){
+
+      const trip = await Trip.findByIdAndUpdate(
+        booking.trip,
+        { $pull: { participants: req.user.id } }, // Add user to participants
+        { new: true } // Return updated document
+    );
+    }
+
     res.json({ message: `Booking has been ${status}.`, booking });
   } catch (err) {
     res.status(500).json({ message: 'Error updating booking', error: err.message });
@@ -79,12 +98,13 @@ router.put('/:bookingId', async (req, res) => {
 });
 
 // Get bookings by user ID
-router.get('/user/:userId', async (req, res) => {
-  const { userId } = req.params;
+router.get('/tripsbyuser', authMiddleware, async (req, res) => {
+
+  console.log(req.user.id)
 
   try {
-    const bookings = await Booking.find({ user: userId }).populate('trip');
-    res.json(bookings);
+    const bookings = await Booking.find({ user: req.user.id }).populate('user trip');
+    res.json({bookings, totalPages: 1});
   } catch (err) {
     res.status(500).json({ message: 'Error fetching bookings', error: err.message });
   }
