@@ -6,4 +6,4 @@ const authorizeUser = (req, res, next) => {
     next();
   };
 
-  module.exports = authorizeUser;
+module.exports = authorizeUser;

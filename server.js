@@ -3,13 +3,27 @@ const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const http = require('http');
 
 // Initialize App
 dotenv.config();
 const app = express();
+const server = http.createServer(app);
+const socketIo = require('socket.io');
+const io = socketIo(server, {
+  cors: {
+    origin: 'http://localhost:3000', // Adjust for your frontend
+    methods: ['GET', 'POST'],
+    credentials: true,
+  }
+});
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:3000',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true,
+}));
 app.use(bodyParser.json());
 
 // MongoDB Connection
@@ -19,7 +33,7 @@ const connectDB = async () => {
     console.log('MongoDB Connected');
   } catch (err) {
     console.error('Database connection failed:', err.message);
-    process.exit(1); // Exit process if DB connection fails
+    process.exit(1);
   }
 };
 connectDB();
@@ -30,20 +44,30 @@ const tripRoutes = require('./routes/tripRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const userRoutes = require('./routes/userRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const expenseRoutes = require('./routes/expensesRoutes');
+
+app.use('/api/expenses', expenseRoutes)
+app.use('/api/chat', chatRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/trips', tripRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/uploads/users', express.static('uploads/users'));
 
 // Health Check
 app.get('/health', (req, res) => {
   res.status(200).json({ message: 'Server is healthy', uptime: process.uptime() });
 });
 
+// Socket.IO logic
+const socketHandler = require('./utils/socket');
+socketHandler(io);
+
 // Start Server
-const PORT = process.env.PORT || 1500
-const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const PORT = process.env.PORT || 1500;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // Graceful Shutdown
 process.on('SIGTERM', () => {

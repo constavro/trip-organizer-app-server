@@ -1,17 +1,4 @@
-const chatSchema = new mongoose.Schema({
-    participants: [
-      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
-    ], // List of users in the chat
-    messages: [
-      {
-        sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-        text: { type: String, required: true },
-        timestamp: { type: Date, default: Date.now },
-      }
-    ]
-  }, { timestamps: true });
-
-  const notificationSchema = new mongoose.Schema({
+const notificationSchema = new mongoose.Schema({
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     type: { type: String, enum: ['booking', 'review', 'chat', 'tripUpdate'], required: true },
     message: { type: String, required: true },

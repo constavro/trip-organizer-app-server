@@ -44,7 +44,7 @@ router.post('/', authMiddleware, async (req, res) => {
 router.get('/host/:hostId', authMiddleware, async (req, res) => {
 
   try {
-    const trips = await Trip.find({ host: req.user.id });
+    const trips = await Trip.find({ organizer: req.user.id });
     const tripIds = trips.map(trip => trip._id);
     
     const bookings = await Booking.find({ trip: { $in: tripIds }, status: 'pending' }).populate('user trip');
@@ -71,25 +71,28 @@ router.put('/:bookingId', authMiddleware, async (req, res) => {
     }
 
     booking.status = status;
+
+    if (status === 'accepted') {
+      const updatedTrip = await Trip.findByIdAndUpdate(
+        booking.trip,
+        {
+          $addToSet: { participants: booking.user } // Ensure no duplicates
+        },
+        {
+          new: true // Return the updated document
+        }
+      );
+    
+      if (!updatedTrip) {
+        return res.status(404).json({ message: 'Trip not found' });
+      }
+    
+      // No need to call updatedTrip.save() after findByIdAndUpdate
+    }
+    
+
     await booking.save();
 
-    if (status === 'accepted'){
-
-      const trip = await Trip.findByIdAndUpdate(
-        booking.trip,
-        { $addToSet: { participants: req.user.id } }, // Add user to participants
-        { new: true } // Return updated document
-    );
-    }
-
-    if (status === 'cancelled'){
-
-      const trip = await Trip.findByIdAndUpdate(
-        booking.trip,
-        { $pull: { participants: req.user.id } }, // Add user to participants
-        { new: true } // Return updated document
-    );
-    }
 
     res.json({ message: `Booking has been ${status}.`, booking });
   } catch (err) {
@@ -99,14 +102,22 @@ router.put('/:bookingId', authMiddleware, async (req, res) => {
 
 // Get bookings by user ID
 router.get('/tripsbyuser', authMiddleware, async (req, res) => {
-
-  console.log(req.user.id)
-
   try {
-    const bookings = await Booking.find({ user: req.user.id }).populate('user trip');
-    res.json({bookings, totalPages: 1});
+    const userId = req.user.id;
+
+    // Trips organized by the user
+    const organized = await Trip.find({ organizer: userId });
+
+    // Trips where the user is a participant (but not the organizer)
+    const joined = await Trip.find({ 
+      participants: userId,
+      organizer: { $ne: userId } 
+    });
+
+    res.json({ organized, joined, totalPages: 1 });
   } catch (err) {
-    res.status(500).json({ message: 'Error fetching bookings', error: err.message });
+    console.error(err);
+    res.status(500).json({ message: 'Error fetching trips', error: err.message });
   }
 });
 

@@ -2,7 +2,6 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const Profile = require('../models/Profile');
 const authMiddleware = require('../middleware/authMiddleware');
 const { transporter, generateResetToken, generateJWT } = require('../utils/authUtils');
 const router = express.Router();
@@ -31,16 +30,6 @@ router.post('/signup', async (req, res) => {
       password: hashedPassword,
     });
     await newUser.save();
-
-    const newProfile = new Profile({
-      userId: newUser._id,
-      bio: '',
-      spokenLanguages: [],
-      photos: [],
-      about: '',
-      countriesVisited: [],
-    });
-    await newProfile.save();
 
     const confirmationToken = generateJWT(newUser._id);
     const confirmationUrl = `${BACKEND_URL}/api/auth/confirm/${confirmationToken}`;
