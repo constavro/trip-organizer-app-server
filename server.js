@@ -12,7 +12,7 @@ const server = http.createServer(app);
 const socketIo = require('socket.io');
 const io = socketIo(server, {
   cors: {
-    origin: 'https://waylo.gr', // Adjust for your frontend
+    origin: process.env.FRONTEND_URL, // Adjust for your frontend
     methods: ['GET', 'POST'],
     credentials: true,
   }
@@ -20,7 +20,7 @@ const io = socketIo(server, {
 
 // Middleware
 app.use(cors({
-  origin: 'https://waylo.gr',
+  origin: process.env.FRONTEND_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
 }));
