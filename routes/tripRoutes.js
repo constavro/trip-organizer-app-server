@@ -3,7 +3,7 @@ const router = express.Router();
 const Trip = require('../models/Trip');
 const authMiddleware = require('../middleware/authMiddleware');
 const validateOwnership = require('../middleware/tripMiddleware');
-const { sendError, getPagination } = require('../utils/tripUtils');
+const { sendError, getPagination, generateAITrip } = require('../utils/tripUtils');
 
 // ======================== ROUTES ==========================
 
@@ -159,7 +159,6 @@ router.delete('/:id', authMiddleware, validateOwnership, async (req, res) => {
   }
 });
 
-// Add this to your trip routes
 router.get('/:tripId/participants', authMiddleware, async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.tripId).populate('participants', 'firstName _id');
@@ -167,6 +166,25 @@ router.get('/:tripId/participants', authMiddleware, async (req, res) => {
     res.json(trip.participants);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+
+router.post('/ai-trip', authMiddleware, async (req, res) => {
+  const { startDate, endDate, area, participants } = req.body;
+
+  const userid = req.user.id
+
+  if (!startDate || !endDate || !area || !participants) {
+    return res.status(400).json({ message: 'Missing required fields' });
+  }
+
+  try {
+    const aiTrip = await generateAITrip({ startDate, endDate, area, participants, userid });
+    res.status(201).json(aiTrip);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to generate trip' });
   }
 });
 
