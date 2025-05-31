@@ -32,7 +32,7 @@ router.post('/signup', async (req, res) => {
     await newUser.save();
 
     const confirmationToken = generateJWT(newUser._id);
-    const confirmationUrl = `${BACKEND_URL}/api/auth/confirm/${confirmationToken}`;
+    const confirmationUrl = `${FRONTEND_URL}/confirm/${confirmationToken}`;
 
     await transporter.sendMail({
       from: `"waylo" <no-reply@waylo.com>`,
