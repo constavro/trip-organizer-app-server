@@ -8,19 +8,45 @@ const { fetchUserProfile } = require('../utils/userUtils');
 const authorizeUser = require('../middleware/userMiddleware');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-
-const upload = require('../middleware/upload');
+const upload = require('../middleware/upload'); // Multer middleware
+const { uploadFileToBlob, deleteBlob, getBlobNameFromUrl } = require('../utils/azureBlobService'); // Azure service
+const path = require('path'); // path is still used for generating blob names if needed, fs is removed as it's not used for file system operations for user photos.
 
 // Delete the user and their profile
-router.delete('/:userId', authMiddleware, authorizeUser, async (req, res) => {
+router.delete('/delete-user/:userId', authMiddleware, authorizeUser, async (req, res) => {
   const { userId } = req.params;
 
   try {
-    // Delete the user from the User model
-    const user = await User.findByIdAndDelete(userId);
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    // Delete user's photos from Azure Blob Storage
+    const photosToDelete = [];
+    if (user.profilePhoto) {
+      photosToDelete.push(user.profilePhoto);
+    }
+    if (user.photos && user.photos.length > 0) {
+      photosToDelete.push(...user.photos);
+    }
+
+    for (const photoUrl of photosToDelete) {
+      const blobName = getBlobNameFromUrl(photoUrl);
+      if (blobName) {
+        try {
+          await deleteBlob(blobName);
+        } catch (deleteError) {
+          // Log error but continue, so user deletion is not blocked by a single photo deletion failure
+          console.error(`Failed to delete photo ${blobName} from Azure:`, deleteError.message);
+        }
+      }
+    }
+    
+    // Delete the user from the User model
+    await User.findByIdAndDelete(userId);
+
+    // Optionally, delete other related data like bookings, trips, etc. if needed.
 
     res.status(200).json({
       message: 'User deleted successfully',
@@ -33,18 +59,14 @@ router.delete('/:userId', authMiddleware, authorizeUser, async (req, res) => {
 
 // Get the user profile, their created trips, and their bookings
 router.get('/:userId', authMiddleware, async (req, res) => {
-
   const { userId } = req.params;
   
   try {
     const user = await fetchUserProfile(userId);
 
-    // Fetch the user's created trips
     const createdTrips = await Trip.find({ organizer: userId });
-
     const bookings = await Booking.find({ userId });
 
-    // Combine the user's data for viewing
     const userProfile = {
       user,
       createdTrips,
@@ -58,15 +80,10 @@ router.get('/:userId', authMiddleware, async (req, res) => {
   }
 });
 
-const fs = require('fs');
-const path = require('path');
-
 // Edit logged-in user's profile
 router.put('/:userId', authMiddleware, authorizeUser, async (req, res) => {
   const { userId } = req.params;
   const profileUpdates = req.body;
-
-  console.log('Incoming profile updates:', profileUpdates);
 
   try {
     const user = await User.findById(userId);
@@ -74,35 +91,47 @@ router.put('/:userId', authMiddleware, authorizeUser, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Determine which photos to delete
-    if (profileUpdates.photos && Array.isArray(profileUpdates.photos)) {
+    // Handle photo deletions if photos array is explicitly managed
+    if (profileUpdates.photos !== undefined && Array.isArray(profileUpdates.photos)) {
       const oldPhotos = user.photos || [];
-      const newPhotos = profileUpdates.photos;
+      const newPhotos = profileUpdates.photos; // These are expected to be Azure URLs
 
-      const removedPhotos = oldPhotos.filter(oldPath => !newPhotos.includes(oldPath));
+      const removedPhotoUrls = oldPhotos.filter(oldUrl => !newPhotos.includes(oldUrl));
 
-      removedPhotos.forEach((photoPath) => {
-        const fullPath = path.join(__dirname, '..', photoPath);
-        console.log(fullPath)
-        fs.unlink(fullPath, (err) => {
-          if (err) {
-            console.error(`Failed to delete photo at ${fullPath}:`, err.message);
-          } else {
-            console.log(`Deleted photo: ${fullPath}`);
+      for (const photoUrl of removedPhotoUrls) {
+        const blobName = getBlobNameFromUrl(photoUrl);
+        if (blobName) {
+          try {
+            await deleteBlob(blobName);
+          } catch (deleteError) {
+            console.error(`Failed to delete photo ${blobName} from Azure:`, deleteError.message);
+            // Decide if you want to stop the update or just log the error
           }
-        });
-      });
+        }
+      }
+    }
+    
+    // If profilePhoto is being changed and there was an old one
+    if (profileUpdates.profilePhoto !== undefined && user.profilePhoto && user.profilePhoto !== profileUpdates.profilePhoto) {
+        const oldProfilePhotoBlobName = getBlobNameFromUrl(user.profilePhoto);
+        if (oldProfilePhotoBlobName) {
+            try {
+                await deleteBlob(oldProfilePhotoBlobName);
+            } catch (deleteError) {
+                console.error(`Failed to delete old profile photo ${oldProfilePhotoBlobName} from Azure:`, deleteError.message);
+            }
+        }
     }
 
-    // Update only the allowed profile fields
+
     const allowedFields = [
       'bio',
       'about',
-      'profilePhoto',
+      'profilePhoto', // This will now be an Azure Blob URL
       'spokenLanguages',
       'countriesVisited',
       'socialLinks',
-      'photos',
+      'photos', // This will now be an array of Azure Blob URLs
     ];
 
     allowedFields.forEach((field) => {
@@ -123,60 +152,96 @@ router.put('/:userId', authMiddleware, authorizeUser, async (req, res) => {
   }
 });
 
-
-
-
+// Generic photo upload (e.g., for user's photo gallery)
 router.post('/upload-photo', authMiddleware, upload.single('photo'), async (req, res) => {
+  if (req.fileValidationError) {
+    return res.status(400).json({ error: req.fileValidationError });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
   try {
+    const originalName = req.file.originalname;
+    const extension = path.extname(originalName);
+    // Blob name includes a path-like structure for organization
+    const blobName = `users/${req.user.id}/${Date.now()}-${path.basename(originalName, extension)}${extension}`;
+    
+    const photoUrl = await uploadFileToBlob(req.file.buffer, blobName, req.file.mimetype);
 
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    const photoPath = `/uploads/users/${req.file.filename}`;
-
-    console.log(photoPath); // Confirm the correct path
-
-    res.status(200).json({ message: 'Photo uploaded', path: photoPath });
+    res.status(200).json({ message: 'Photo uploaded', path: photoUrl });
   } catch (err) {
-    console.error('Error uploading photo:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Error uploading photo to Azure:', err);
+    res.status(500).json({ error: 'Failed to upload photo', details: err.message });
   }
 });
 
-router.delete('/photos', authMiddleware, async (req, res) => {
-  const { path: photoPath } = req.body;
-  console.log("delete")
-
-  try {
-    const absolutePath = path.join(__dirname, '..', 'uploads', photoPath);
-    fs.unlinkSync(absolutePath);
-
-    res.status(200).json({ message: 'Photo deleted successfully', removedPath: photoPath });
-  } catch (err) {
-    console.error('Error deleting photo:', err);
-    res.status(500).json({ message: 'Failed to delete photo' });
-  }
-});
-
-
+// Upload profile photo
 router.post('/upload-profile-photo', authMiddleware, upload.single('photo'), async (req, res) => {
+  if (req.fileValidationError) {
+    return res.status(400).json({ error: req.fileValidationError });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
   try {
+    const originalName = req.file.originalname;
+    const extension = path.extname(originalName);
+    const blobName = `users/${req.user.id}/profile/${Date.now()}-${path.basename(originalName, extension)}${extension}`;
+    
+    const photoUrl = await uploadFileToBlob(req.file.buffer, blobName, req.file.mimetype);
 
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    const photoPath = `/uploads/users/${req.file.filename}`;
-
-    console.log(photoPath)
-
-    res.status(200).json({ message: 'Photo uploaded', path: photoPath });
+    // Optionally: if an old profile photo exists, delete it from Azure.
+    // This depends on your logic: do you update user.profilePhoto here or just return the URL?
+    // Assuming this endpoint just uploads and returns the URL, and the PUT /:userId handles updating user.profilePhoto and deleting old one.
+    
+    res.status(200).json({ message: 'Profile photo uploaded', path: photoUrl });
   } catch (err) {
-    console.error('Error uploading photo:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Error uploading profile photo to Azure:', err);
+    res.status(500).json({ error: 'Failed to upload profile photo', details: err.message });
   }
 });
+
+// Delete a specific photo (e.g., from user's photo gallery)
+router.delete('/delete-photos', authMiddleware, async (req, res) => {
+  const { photoUrl } = req.body; // Expecting the full Azure Blob URL
+
+  if (!photoUrl) {
+    return res.status(400).json({ message: 'Photo URL is required' });
+  }
+
+  try {
+    const blobName = getBlobNameFromUrl(photoUrl);
+    if (!blobName) {
+      return res.status(400).json({ message: 'Invalid photo URL provided' });
+    }
+
+    // Optional: Check if the photo belongs to the user making the request.
+    // This would require knowing how photos are associated with users in your DB (e.g. User.photos array).
+    // For example:
+    // const user = await User.findById(req.user.id);
+    // if (!user.photos.includes(photoUrl) && user.profilePhoto !== photoUrl) {
+    //   return res.status(403).json({ message: "You are not authorized to delete this photo." });
+    // }
+
+    await deleteBlob(blobName);
+
+    // After deleting from Azure, you might need to update the user's document
+    // if this photoUrl was stored in user.photos or user.profilePhoto.
+    // This endpoint currently only deletes from Azure. The profile update (PUT /:userId)
+    // is responsible for updating the User document.
+    // If this endpoint is meant to be a standalone "delete this photo from my profile",
+    // then it should also update the User document.
+    // For now, it just deletes the blob. The frontend will likely trigger a profile update afterwards.
+
+    res.status(200).json({ message: 'Photo deleted successfully from Azure', removedPath: photoUrl });
+  } catch (err) {
+    console.error('Error deleting photo from Azure:', err);
+    res.status(500).json({ message: 'Failed to delete photo from Azure', error: err.message });
+  }
+});
+
 
 router.put('/:userId/change-password', authMiddleware, authorizeUser, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
@@ -192,7 +257,5 @@ router.put('/:userId/change-password', authMiddleware, authorizeUser, async (req
 
   res.status(200).json({ message: 'Password updated successfully' });
 });
-
-
 
 module.exports = router;

@@ -35,7 +35,7 @@ router.post('/signup', async (req, res) => {
     const confirmationUrl = `${BACKEND_URL}/api/auth/confirm/${confirmationToken}`;
 
     await transporter.sendMail({
-      from: `"Your App Name" <no-reply@yourapp.com>`,
+      from: `"waylo" <no-reply@waylo.com>`,
       to: email,
       subject: 'Account Confirmation',
       html: `

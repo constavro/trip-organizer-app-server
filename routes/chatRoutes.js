@@ -22,13 +22,14 @@ router.get('/user', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    console.log(userId)
-
     // Find all trips the user participates in
-    const trips = await Trip.find({ participants: userId }).select('_id title');
-
-
-    console.log(trips)
+    const trips = await Trip.find({
+      $or: [
+        { participants: userId },
+        { organizer: userId }
+      ]
+    }).select('_id title');
+    
 
     const chats = await Promise.all(trips.map(async (trip) => {
       const lastMessage = await Message.findOne({ trip: trip._id })

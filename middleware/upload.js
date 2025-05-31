@@ -1,23 +1,23 @@
+// middleware/upload.js
 const multer = require('multer');
-const fs = require('fs');
 const path = require('path');
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadPath = path.join(__dirname, '..', 'uploads', 'users');
+// Using memory storage as files will be streamed to Azure Blob Storage
+const storage = multer.memoryStorage();
 
-    // Ensure the directory exists
-    fs.mkdirSync(uploadPath, { recursive: true });
+const fileFilter = (req, file, cb) => {
+  // Accept images only
+  if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/i)) {
+    req.fileValidationError = 'Only image files (jpg, jpeg, png, gif) are allowed!';
+    return cb(new Error('Only image files (jpg, jpeg, png, gif) are allowed!'), false);
+  }
+  cb(null, true);
+};
 
-    cb(null, uploadPath);
-  },
-  filename: function (req, file, cb) {
-    const ext = path.extname(file.originalname);
-    const filename = `${Date.now()}-${file.originalname}`;
-    cb(null, filename);
-  },
+const upload = multer({ 
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: { fileSize: 5 * 1024 * 1024 } // Example: 5MB file size limit
 });
-
-const upload = multer({ storage });
 
 module.exports = upload;

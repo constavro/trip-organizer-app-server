@@ -38,11 +38,6 @@ const connectDB = async () => {
 };
 connectDB();
 
-app.use((req, res, next) => {
-  console.log('Origin:', req.headers.origin);
-  console.log(`${req.method} ${req.url}`);
-  next();
-});
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
@@ -60,7 +55,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/trips', tripRoutes);
 app.use('/api/bookings', bookingRoutes);
-app.use('/uploads/users', express.static('uploads/users'));
+// app.use('/uploads/users', express.static('uploads/users'));
 
 // Health Check
 app.get('/health', (req, res) => {
