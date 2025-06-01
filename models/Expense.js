@@ -21,7 +21,8 @@ const expenseSchema = new mongoose.Schema({
         "Transportation", "Flights", "Trains", "Buses & Taxis", "Fuel", "Rental Car",
         "Accommodation", "Hotel", "Hostel", "Vacation Rental",
         "Activities & Entertainment", "Tours", "Tickets & Events", "Souvenirs", "Shopping",
-        "Health & Wellness", "Fees & Charges", "Utilities", "Gifts", "Miscellaneous"
+        "Health & Wellness", "Fees & Charges", "Utilities", "Gifts", "Miscellaneous",
+        "SETTLEMENT"
     ],
     required: true
   },
@@ -29,7 +30,7 @@ const expenseSchema = new mongoose.Schema({
   splitDetails: {
       type: {
           type: String,
-          enum: ['equally', 'unequally_by_amount', /* 'by_percentage', 'itemized' */], // Added more specific types
+          enum: ['equally', 'unequally_by_amount', 'SETTLEMENT_PAYOUT' /* 'by_percentage', 'itemized' */], // Added more specific types
           required: true,
           default: 'equally'
       },

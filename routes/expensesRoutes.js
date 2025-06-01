@@ -8,6 +8,82 @@ const Trip = require('../models/Trip');
 // const User = require('../models/User');
 const authMiddleware = require('../middleware/authMiddleware');
 
+// This is a simplified version focused on a single trip for settlement
+async function calculateTripBalancesForSettlement(tripId, allTripParticipants) {
+  const expenses = await Expense.find({ trip: tripId })
+      .populate('payer', '_id')
+      .populate('splitDetails.participants.user', '_id')
+      .lean();
+
+  const userBalances = {}; // { userId: balance }
+  allTripParticipants.forEach(p => userBalances[p._id.toString()] = 0);
+
+  expenses.forEach(exp => {
+      const payerId = exp.payer._id.toString();
+      const amount = exp.amount;
+
+      // Payer gets credited
+      if (userBalances[payerId] !== undefined) {
+          userBalances[payerId] += amount;
+      }
+
+      // Participants get debited their share
+      if (exp.splitDetails && exp.splitDetails.participants) {
+          const { type, participants: splitParticipants } = exp.splitDetails;
+          const numSplitParticipants = splitParticipants.length;
+
+          if (numSplitParticipants === 0) return;
+
+          splitParticipants.forEach(sp => {
+              const participantUserId = sp.user._id.toString();
+              if (userBalances[participantUserId] === undefined) return;
+
+              let share = 0;
+              if (type === 'equally') {
+                  share = amount / numSplitParticipants;
+              } else if (type === 'unequally_by_amount') {
+                  share = sp.amountOwed || 0;
+              } else if (type === 'SETTLEMENT_PAYOUT') {
+                  // This is money received by participant, so it reduces their share of costs/increases their credit
+                  share = sp.amountOwed || 0; // For settlement, amountOwed is amount received
+              }
+              // For regular expenses, share is a cost. For SETTLEMENT_PAYOUT, it's a credit received.
+              // The balance calculation logic needs to correctly interpret this.
+              // Original balance logic: totalPaidByMe - totalMyShare
+              // If this is a settlement I receive: my share of costs effectively decreases.
+              // If it's a settlement I pay: I paid it, it adds to totalPaidByMe.
+              
+              // Let's adjust how SETTLEMENT_PAYOUT affects balances here:
+              // If an expense is a SETTLEMENT_PAYOUT, the 'payer' is the one settling.
+              // The 'splitDetails.participants' are the recipients.
+              // So, for recipients, their balance should go UP (they are owed less, or get cash).
+              // And for the payer, their balance should go DOWN (they paid out).
+              // The generic expense calculation already handles the payer part (totalPaidByMe += amount).
+              // For the recipients of a SETTLEMENT_PAYOUT:
+              if (type === 'SETTLEMENT_PAYOUT') {
+                   // If user 'participantUserId' is in splitDetails, they received 'share'.
+                   // This means their net balance *increases* by 'share'.
+                   // So, if their balance was -50 (owe 50), and they receive 20, it becomes -30.
+                   // If their balance was +50 (owed 50), and they receive 20, it becomes +70.
+                   // The current debiting logic (userBalances[participantUserId] -= share) for standard expenses needs care.
+                   // For SETTLEMENT_PAYOUT, for a participant, it's a credit.
+                   // Let's rethink. The primary balance logic is (Total I Paid) - (My Share of Total Costs)
+                   // A settlement I pay: increases "Total I Paid".
+                   // A settlement I receive (I am a participant in someone else's SETTLEMENT_PAYOUT): decreases "My Share of Total Costs"
+                   // So, for SETTLEMENT_PAYOUT, the 'amountOwed' for a participant IS their share of the cost for this "expense"
+                   // which means it reduces their positive balance or increases their negative balance.
+                   // This means the existing userBalances[participantUserId] -= share; is correct if 'share' is amount received.
+                  userBalances[participantUserId] -= share; // This is correct. If I receive 50, my "share" of costs reduces by 50.
+
+              } else { // For 'equally' and 'unequally_by_amount'
+                  userBalances[participantUserId] -= share;
+              }
+          });
+      }
+  });
+  return userBalances;
+}
+
 // Helper to get trip participants and validate user access
 async function getTripAndValidateAccess(tripId, userId) {
   if (!mongoose.Types.ObjectId.isValid(tripId)) {
@@ -59,7 +135,7 @@ router.get('/trip/:tripId', authMiddleware, async (req, res) => {
     const expenses = await Expense.find({ trip: tripId })
       .populate('payer', 'firstName lastName profilePhoto _id')
       .populate('splitDetails.participants.user', 'firstName lastName profilePhoto _id')
-      .sort({ expenseDate: -1, createdAt: -1 })
+      .sort({ createdAt: -1 })
       .lean();
 
     res.json({ tripTitle, expenses, participants: tripParticipants });
@@ -114,6 +190,9 @@ router.get('/mybalances', authMiddleware, async (req, res) => {
               case 'unequally_by_amount':
                 totalMyShare += mySplitDetail.amountOwed || 0;
                 break;
+              case 'SETTLEMENT_PAYOUT':
+                  totalMyShare += mySplitDetail.amountOwed || 0;
+                  break;
               default:
                 // Fallback or error for unhandled split types
                 break;
@@ -353,6 +432,158 @@ router.delete('/:expenseId', authMiddleware, async (req, res) => {
   } catch (err) {
       console.error("Error deleting expense:", err);
       res.status(500).json({ message: err.message || 'Failed to delete expense.' });
+  }
+});
+
+// POST /api/expenses/trip/:tripId/settle - Current user settles their debts for this trip
+router.post('/trip/:tripId/settle', authMiddleware, async (req, res) => {
+  try {
+      const { tripId } = req.params;
+      const currentUserId = new mongoose.Types.ObjectId(req.user.id);
+      const currentUserObjectIdString = req.user.id;
+
+
+      if (!mongoose.Types.ObjectId.isValid(tripId)) {
+          return res.status(400).json({ message: 'Invalid Trip ID.' });
+      }
+
+      const trip = await Trip.findById(tripId)
+          .populate('participants', '_id firstName lastName email profilePhoto') // Ensure full participant details
+          .populate('organizer', '_id firstName lastName email profilePhoto')
+          .lean();
+
+      if (!trip) {
+          return res.status(404).json({ message: 'Trip not found.' });
+      }
+
+      const isOrganizer = trip.organizer._id.equals(currentUserId);
+      const isParticipant = trip.participants.some(p => p._id.equals(currentUserId));
+
+      if (!isOrganizer && !isParticipant) {
+          return res.status(403).json({ message: 'User not authorized for this trip.' });
+      }
+      
+      let allTripUsers = [...trip.participants];
+      if (!trip.participants.find(p => p._id.equals(trip.organizer._id))) {
+          allTripUsers.push(trip.organizer); // Add organizer if not already in participants
+      }
+      // Deduplicate allTripUsers
+      allTripUsers = allTripUsers.filter((user, index, self) =>
+          index === self.findIndex((u) => u._id.equals(user._id))
+      );
+
+
+      const balances = await calculateTripBalancesForSettlement(tripId, allTripUsers);
+
+      const currentUserBalance = balances[currentUserObjectIdString] || 0;
+
+      if (currentUserBalance >= -0.001) { // Using a small epsilon for floating point
+          return res.status(400).json({ message: 'You have no outstanding debts to settle for this trip.' });
+      }
+
+      const amountToSettle = Math.abs(currentUserBalance);
+      let remainingAmountToDistribute = amountToSettle;
+      const settlementPayouts = [];
+
+      // Identify creditors (those owed money by the group)
+      const creditors = [];
+      for (const userId in balances) {
+          if (userId !== currentUserObjectIdString && balances[userId] > 0.001) { // User is owed money
+              creditors.push({ userId: new mongoose.Types.ObjectId(userId), amountOwedByGroup: balances[userId] });
+          }
+      }
+
+      if (creditors.length === 0 && amountToSettle > 0) {
+           // This case is odd: current user owes, but no one is listed as a creditor.
+           // This might happen if everyone else is also negative or zero.
+           // Or if floating point math is tricky.
+           // For simplicity, if current user owes but no single creditor, this settlement might just zero out their balance
+           // by effectively paying "the group pool". The easiest way to model this is a payment to oneself if no other creditors.
+           // Or better, don't create a complex split if there are no clear creditors.
+           // The most robust way: if the user owes money, this money should notionally go to those who are owed.
+           // If no one is owed, this implies an imbalance in the system or very complex circular debts not easily resolved by one user settling.
+           // For now, we will distribute only to clear creditors.
+           // If amountToSettle > 0 but creditors.length == 0, this implies the money is owed to people who themselves owe money or are settled.
+           // This scenario usually shouldn't happen in a well-balanced system unless simplified debts are already applied.
+           console.warn(`User ${currentUserObjectIdString} owes ${amountToSettle} but no clear creditors found in trip ${tripId}. This might indicate a complex balance state.`);
+           // Fallback: The settlement still happens from the current user's perspective.
+           // The "split" will be empty, effectively meaning the user paid, and their balance becomes 0.
+           // This isn't ideal as the money doesn't clearly go to anyone.
+           // A better approach for this edge case might be needed depending on desired system behavior.
+           // For now, proceed but the money might not be explicitly distributed if no positive balances exist.
+      }
+
+      // Sort creditors by how much they are owed (smallest first, to prioritize fully paying off smaller debts if possible)
+      // Or largest first - let's stick to proportional distribution for fairness
+      // creditors.sort((a, b) => a.amountOwedByGroup - b.amountOwedByGroup);
+
+      const totalCreditOwedByGroup = creditors.reduce((sum, c) => sum + c.amountOwedByGroup, 0);
+
+      if (totalCreditOwedByGroup > 0.001) { // Only distribute if there's actual credit to pay into
+          for (const creditor of creditors) {
+              if (remainingAmountToDistribute <= 0.001) break;
+
+              // Proportional distribution
+              let amountPaidToCreditor = (creditor.amountOwedByGroup / totalCreditOwedByGroup) * amountToSettle;
+              amountPaidToCreditor = Math.min(amountPaidToCreditor, creditor.amountOwedByGroup, remainingAmountToDistribute);
+              amountPaidToCreditor = parseFloat(amountPaidToCreditor.toFixed(2));
+
+
+              if (amountPaidToCreditor > 0.001) {
+                  settlementPayouts.push({
+                      user: creditor.userId,
+                      amountOwed: amountPaidToCreditor // 'amountOwed' here means 'amount received by this creditor'
+                  });
+                  remainingAmountToDistribute -= amountPaidToCreditor;
+              }
+          }
+      }
+      
+      // If after distribution there's still a tiny remaining amount due to rounding,
+      // and there are payouts, add it to the first person who received something.
+       if (remainingAmountToDistribute > 0.001 && remainingAmountToDistribute < 0.05 && settlementPayouts.length > 0) { // Small rounding residual
+          settlementPayouts[0].amountOwed = parseFloat((settlementPayouts[0].amountOwed + remainingAmountToDistribute).toFixed(2));
+          remainingAmountToDistribute = 0;
+      }
+
+
+      // Safety check: if remainingAmountToDistribute is still significant, something is wrong or it's the edge case above.
+      if (remainingAmountToDistribute > 0.01 && settlementPayouts.length === 0 && amountToSettle > 0) {
+          // This means the user owed money, but we couldn't find anyone with a positive balance to pay.
+          // This is an anomaly. The settlement will still proceed from the payer's side.
+          // The "expense" amount will be correct, but splitDetails.participants will be empty.
+          console.warn(`Settlement by ${currentUserObjectIdString} for ${amountToSettle} in trip ${tripId}, but no recipients in splitDetails. Check balances.`);
+      }
+
+
+      const settlementExpense = new Expense({
+          trip: tripId,
+          payer: currentUserId,
+          amount: parseFloat(amountToSettle.toFixed(2)),
+          currency: trip.currency || 'EUR', // Assuming trip has a currency, or use a default
+          description: `Settlement by ${trip.organizer._id.equals(currentUserId) ? trip.organizer.firstName : allTripUsers.find(u=>u._id.equals(currentUserId))?.firstName || 'User'}`,
+          category: 'SETTLEMENT',
+          expenseDate: new Date(),
+          splitDetails: {
+              type: 'SETTLEMENT_PAYOUT',
+              participants: settlementPayouts
+          },
+          notes: 'User initiated settlement of their debts for this trip.'
+      });
+
+      await settlementExpense.save();
+
+      // Populate for response (optional, frontend usually refetches)
+      const populatedSettlement = await Expense.findById(settlementExpense._id)
+          .populate('payer', 'firstName lastName profilePhoto')
+          .populate('splitDetails.participants.user', 'firstName lastName profilePhoto')
+          .lean();
+
+      res.status(201).json({ message: 'Debts settled successfully.', settlement: populatedSettlement });
+
+  } catch (err) {
+      console.error("Error settling debts:", err);
+      res.status(500).json({ message: err.message || 'Failed to settle debts.' });
   }
 });
 
