@@ -8,7 +8,7 @@ const { fetchUserProfile } = require('../utils/userUtils');
 const authorizeUser = require('../middleware/userMiddleware');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const upload = require('../middleware/upload'); // Multer middleware
+const upload = require('../utils/uploadPhoto'); // Multer middleware
 const { uploadFileToBlob, deleteBlob, getBlobNameFromUrl } = require('../utils/azureBlobService'); // Azure service
 const path = require('path'); // path is still used for generating blob names if needed, fs is removed as it's not used for file system operations for user photos.
 
