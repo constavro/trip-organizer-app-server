@@ -112,9 +112,6 @@ async function getTripAndValidateAccess(tripId, userId) {
   }
   
   let allInvolvedUsers = [...trip.participants];
-  if (!trip.participants.find(p => p._id.equals(trip.organizer._id))) {
-      allInvolvedUsers.push(trip.organizer);
-  }
    allInvolvedUsers = allInvolvedUsers.filter((user, index, self) =>
       index === self.findIndex((u) => u._id.equals(user._id))
   );
@@ -137,6 +134,8 @@ router.get('/trip/:tripId', authMiddleware, async (req, res) => {
       .populate('splitDetails.participants.user', 'firstName lastName profilePhoto _id')
       .sort({ createdAt: -1 })
       .lean();
+
+    console.log(tripParticipants)
 
     res.json({ tripTitle, expenses, participants: tripParticipants });
   } catch (err) {
@@ -494,28 +493,9 @@ router.post('/trip/:tripId/settle', authMiddleware, async (req, res) => {
       }
 
       if (creditors.length === 0 && amountToSettle > 0) {
-           // This case is odd: current user owes, but no one is listed as a creditor.
-           // This might happen if everyone else is also negative or zero.
-           // Or if floating point math is tricky.
-           // For simplicity, if current user owes but no single creditor, this settlement might just zero out their balance
-           // by effectively paying "the group pool". The easiest way to model this is a payment to oneself if no other creditors.
-           // Or better, don't create a complex split if there are no clear creditors.
-           // The most robust way: if the user owes money, this money should notionally go to those who are owed.
-           // If no one is owed, this implies an imbalance in the system or very complex circular debts not easily resolved by one user settling.
-           // For now, we will distribute only to clear creditors.
-           // If amountToSettle > 0 but creditors.length == 0, this implies the money is owed to people who themselves owe money or are settled.
-           // This scenario usually shouldn't happen in a well-balanced system unless simplified debts are already applied.
            console.warn(`User ${currentUserObjectIdString} owes ${amountToSettle} but no clear creditors found in trip ${tripId}. This might indicate a complex balance state.`);
-           // Fallback: The settlement still happens from the current user's perspective.
-           // The "split" will be empty, effectively meaning the user paid, and their balance becomes 0.
-           // This isn't ideal as the money doesn't clearly go to anyone.
-           // A better approach for this edge case might be needed depending on desired system behavior.
-           // For now, proceed but the money might not be explicitly distributed if no positive balances exist.
       }
 
-      // Sort creditors by how much they are owed (smallest first, to prioritize fully paying off smaller debts if possible)
-      // Or largest first - let's stick to proportional distribution for fairness
-      // creditors.sort((a, b) => a.amountOwedByGroup - b.amountOwedByGroup);
 
       const totalCreditOwedByGroup = creditors.reduce((sum, c) => sum + c.amountOwedByGroup, 0);
 
@@ -547,11 +527,7 @@ router.post('/trip/:tripId/settle', authMiddleware, async (req, res) => {
       }
 
 
-      // Safety check: if remainingAmountToDistribute is still significant, something is wrong or it's the edge case above.
       if (remainingAmountToDistribute > 0.01 && settlementPayouts.length === 0 && amountToSettle > 0) {
-          // This means the user owed money, but we couldn't find anyone with a positive balance to pay.
-          // This is an anomaly. The settlement will still proceed from the payer's side.
-          // The "expense" amount will be correct, but splitDetails.participants will be empty.
           console.warn(`Settlement by ${currentUserObjectIdString} for ${amountToSettle} in trip ${tripId}, but no recipients in splitDetails. Check balances.`);
       }
 
