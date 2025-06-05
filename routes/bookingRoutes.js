@@ -39,6 +39,32 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/check/:tripId', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { tripId } = req.params;
+
+  if (!tripId) {
+    return res.status(400).json({ message: 'tripId is required' });
+  }
+
+  try {
+    const existingBooking = await Booking.findOne({
+      trip: tripId,
+      user: userId,
+      status: { $in: ['pending', 'cancelled'] },
+    });
+
+    if (existingBooking) {
+      return res.status(200).json({ status: existingBooking.status });
+    } else {
+      return res.status(204).send(); // No existing booking
+    }
+  } catch (error) {
+    console.error('Error checking booking:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 
 // Get bookings for a host to review (pending bookings)
 router.get('/host/:hostId', authMiddleware, async (req, res) => {
@@ -55,7 +81,7 @@ router.get('/host/:hostId', authMiddleware, async (req, res) => {
 });
 
 // Accept or decline a booking
-router.put('/:bookingId', authMiddleware, async (req, res) => {
+router.put('/host/:bookingId', authMiddleware, async (req, res) => {
 
   const { bookingId } = req.params;
   const { status } = req.body;
@@ -73,15 +99,40 @@ router.put('/:bookingId', authMiddleware, async (req, res) => {
     booking.status = status;
 
     if (status === 'accepted') {
+
+      console.log('accepted')
+
+      const trip = await Trip.findById(booking.trip);
+
+      console.log(trip)
+
+      if (!trip) {
+        return res.status(404).json({ message: 'Trip not found' });
+      }
+
+      const update = {
+        $addToSet: { participants: booking.user },
+        $inc: { currentParticipants: 1 }
+      };
+
+      if (trip.currentParticipants + 1 >= trip.maxParticipants) {
+        update.$set = { status: 'full' };
+      } else if (trip.currentParticipants + 1 >= trip.minParticipants) {
+        update.$set = { status: 'confirmed' };
+      }
+
+      console.log(update)
+
+
       const updatedTrip = await Trip.findByIdAndUpdate(
         booking.trip,
-        {
-          $addToSet: { participants: booking.user } // Ensure no duplicates
-        },
+        update,
         {
           new: true // Return the updated document
         }
       );
+
+      console.log(updatedTrip)
     
       if (!updatedTrip) {
         return res.status(404).json({ message: 'Trip not found' });
@@ -97,6 +148,51 @@ router.put('/:bookingId', authMiddleware, async (req, res) => {
     res.json({ message: `Booking has been ${status}.`, booking });
   } catch (err) {
     res.status(500).json({ message: 'Error updating booking', error: err.message });
+  }
+});
+
+router.put('/cancel/:tripId', authMiddleware, async (req, res) => {
+  const { tripId } = req.params;
+
+  try {
+    const booking = await Booking.findOne({ trip: tripId, user: req.user.id });
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    if (booking.status === 'cancelled') {
+      return res.status(400).json({ message: 'Booking already cancelled' });
+    }
+
+    const trip = await Trip.findById(booking.trip);
+    if (!trip) {
+      return res.status(404).json({ message: 'Trip not found' });
+    }
+
+    // Update the booking
+    booking.status = 'cancelled';
+    await booking.save();
+
+    // Remove user from participants and decrement counter (min 0)
+    const updatedTrip = await Trip.findByIdAndUpdate(
+      booking.trip,
+      {
+        $pull: { participants: booking.user },
+        $inc: { currentParticipants: -1 },
+        $set: (trip.currentParticipants - 1) < trip.minParticipants
+        ? { status: 'open' }
+        : { status: 'confirmed' }
+      },
+      { new: true }
+    );
+
+    res.json({
+      message: 'Booking cancelled and trip updated.',
+      booking,
+      trip: updatedTrip
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Error cancelling booking', error: err.message });
   }
 });
 

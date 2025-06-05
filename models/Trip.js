@@ -10,11 +10,13 @@ const tripSchema = new mongoose.Schema({
     inclusions: { type: [String], required: true }, // List of items/services included
     exclusions: { type: [String], required: true }, // List of items/services not included
   }, // Structured description with detailed fields
-  // photos: { type: [String], default: [] }, // Photos for the location
+  coverImage: { type: String },
+  photos: { type: [String], default: [] }, // Photos for the location
   itinerary: [
     {
       order: { type: Number, required: true }, // Order of the stop in the itinerary
       location: { type: String, required: true }, // Location name
+      days: { type: Number }, // Date of the visit
       startDate: { type: Date, required: true }, // Date of the visit
       endDate: { type: Date, required: true }, // Date of the visit
       notes: { type: String }, // Additional details or notes for the stop
@@ -30,6 +32,7 @@ const tripSchema = new mongoose.Schema({
   ],
   minParticipants: { type: Number, required: true },
   maxParticipants: { type: Number, required: true },
+  currentParticipants: { type: Number },
   price: { type: Number, required: true }, // price per person
   tags: { type: [String], default: [] }, // Optional tags for categorization
   participants: [
@@ -38,6 +41,20 @@ const tripSchema = new mongoose.Schema({
       ref: 'User'
     }
   ],  
+  status: {
+    type: String,
+    enum: ['open', 'confirmed', 'full', 'inProgress', 'completed', 'cancelled'],
+    default: 'open',
+    required: true
+  },
+  privacy: {
+    type: String,
+    enum: ['public', 'private', 'unlisted'],
+    default: 'public',
+    required: true
+  },
+  cancellationPolicy: { type: String },
+  bookingDeadline: { type: Date },
   expenses: [{ type: mongoose.Schema.Types.ObjectId, ref: "Expense" }],
   chat: [{ type: mongoose.Schema.Types.ObjectId, ref: "Message" }],
 }, { timestamps: true });
