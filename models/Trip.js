@@ -16,7 +16,7 @@ const tripSchema = new mongoose.Schema({
     {
       order: { type: Number, required: true }, // Order of the stop in the itinerary
       location: { type: String, required: true }, // Location name
-      days: { type: Number }, // Date of the visit
+      days: { type: Number, required: true }, // How many days spent in this stop
       startDate: { type: Date, required: true }, // Date of the visit
       endDate: { type: Date, required: true }, // Date of the visit
       notes: { type: String }, // Additional details or notes for the stop
