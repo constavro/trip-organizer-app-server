@@ -15,36 +15,135 @@ const OPENCAGE_API_KEY = "326c5582aa4f4768a94cb809b894f1ff"
 
 // GET: All trips with pagination and filters
 router.get("/", async (req, res) => {
-  const { page, limit, skip } = getPagination(req);
-  const { tags, minPrice, maxPrice } = req.query;
+  const { page, limit: queryLimit, skip } = getPagination(req, { defaultLimit: 6 }); // Default limit for general list
+  const {
+    tags, // Comma-separated string
+    minPrice,
+    maxPrice,
+    startDate, // ISO Date string
+    endDate,   // ISO Date string
+    status,    // Trip status
+    search,    // Search query for title or location
+    sort,      // Sort option (e.g., priceAsc, dateAsc)
+    special,   // For special sections: 'lastSpot', 'confirmed', 'bookingSoon'
+  } = req.query;
 
   try {
-    const filter = {};
+    const filter = {
+      privacy: 'public',
+      status: { $nin: ['inProgress', 'completed', 'cancelled'] }
+    };
+    
+
+    if (search) {
+      const searchRegex = { $regex: search, $options: "i" };
+      filter.$or = [
+        { title: searchRegex },
+        { "itinerary.location": searchRegex },
+        // Add more fields to search if needed, e.g., description.overview
+      ];
+    }
+
     if (tags) filter.tags = { $in: tags.split(",") };
-    if (minPrice) filter.price = { $gte: parseInt(minPrice) };
+    if (minPrice) filter.price = { ...filter.price, $gte: parseInt(minPrice) };
     if (maxPrice) filter.price = { ...filter.price, $lte: parseInt(maxPrice) };
-    filter.privacy = 'public';
+
+    if (startDate) filter.startDate = { ...filter.startDate, $gte: new Date(startDate) };
+    if (endDate) filter.endDate = { ...filter.endDate, $lte: new Date(endDate) }; // This filters trips ENDING before this date.
+                                                                                // If you want trips STARTING before this date, adjust accordingly.
+
+    if (status) filter.status = status;
+
+    let sortOption = {};
+    if (sort) {
+      switch (sort) {
+        case "priceAsc":
+          sortOption = { price: 1 };
+          break;
+        case "priceDesc":
+          sortOption = { price: -1 };
+          break;
+        case "dateAsc": // Soonest departure
+          sortOption = { startDate: 1 }; // Assuming startDate is the main departure date
+          break;
+        case "dateDesc": // Latest departure
+          sortOption = { startDate: -1 };
+          break;
+        case "createdAtDesc": // Newest first
+          sortOption = { createdAt: -1 };
+          break;
+        default:
+          sortOption = { createdAt: -1 }; // Default sort
+      }
+    } else {
+      sortOption = { createdAt: -1 }; // Default sort if none provided
+    }
+
+    let effectiveLimit = queryLimit;
+
+    // Handle special sections
+    if (special) {
+      effectiveLimit = parseInt(req.query.previewLimit) || 3; // For preview sections, limit to a few items
+      switch (special) {
+        case "lastSpot":
+          // Assumes currentParticipants is accurate.
+          // This requires MongoDB 4.2+ for $expr in $match with $subtract in $elemMatch or complex aggregation.
+          // A simpler way if your model has `availableSpots` field or if you can calculate it.
+          // For now, let's use $expr. If currentParticipants is not on Trip directly, adjust.
+          filter.$expr = {
+            $eq: [1, { $subtract: ["$maxParticipants", "$currentParticipants"] }],
+          };
+          filter.status = { $in: ['open', 'confirmed'] }; // Only show for trips that can still be booked or are active
+          break;
+        case "confirmed":
+          filter.status = "confirmed";
+          break;
+        case "bookingSoon":
+          const today = new Date();
+          const sevenDaysFromNow = new Date();
+          sevenDaysFromNow.setDate(today.getDate() + 7);
+          filter.bookingDeadline = { $gte: today, $lte: sevenDaysFromNow };
+          filter.status = "open";
+          // Optional: Sort by bookingDeadline ascending
+          sortOption = { bookingDeadline: 1 };
+          break;
+        case "newlyAdded":
+          // Already handled by default sort if no other sort is specified, or explicitly:
+          sortOption = { createdAt: -1 };
+          break;
+        case "startingSoon":
+          const nextMonth = new Date();
+          nextMonth.setMonth(nextMonth.getMonth() + 1);
+          filter.startDate = { $gte: new Date(), $lte: nextMonth };
+          filter.status = { $in: ['open', 'confirmed'] };
+          sortOption = { startDate: 1 };
+          break;
+      }
+    }
 
     const [trips, totalTrips] = await Promise.all([
       Trip.find(filter)
         .populate("organizer", "firstName lastName")
-        .limit(limit)
-        .skip(skip),
-      Trip.countDocuments(filter),
+        .sort(sortOption)
+        .limit(effectiveLimit)
+        .skip(special ? 0 : skip) // No skipping for special preview sections
+        .lean(), // Use .lean() for better performance if you don't need Mongoose documents
+      Trip.countDocuments(filter), // Count should reflect the main filter, not special section limits
     ]);
 
     res.status(200).json({
       trips,
-      pagination: {
-        totalTrips,
+      pagination: special ? null : { // No pagination for special sections
+        totalItems: totalTrips,
         currentPage: page,
-        totalPages: Math.ceil(totalTrips / limit),
-        limit,
+        totalPages: Math.ceil(totalTrips / queryLimit),
+        limit: queryLimit,
       },
     });
   } catch (err) {
-    console.error(err.message);
-    sendError(res, 500, "Error fetching trips", err.message);
+    console.error("Error fetching trips:", err.message);
+    // sendError(res, 500, "Error fetching trips", err.message);
+    res.status(500).json({ message: "Error fetching trips", error: err.message });
   }
 });
 
@@ -191,22 +290,6 @@ if (!geoLocation || geoLocation.lat == '' || geoLocation.lng == '') {
   }
 });
 
-// PUT: Update trip details
-// // Helper to calculate stop end date (ensure it's UTC-aware)
-// const calculateStopEndDate = (startDateStr, numDays) => {
-//   if (!startDateStr || isNaN(parseInt(numDays)) || parseInt(numDays) < 1) return null; // Or throw error
-//   const date = new Date(startDateStr); // Assume startDateStr is already a Date object or valid ISO string
-//   date.setUTCDate(date.getUTCDate() + parseInt(numDays) - 1);
-//   return date;
-// };
-
-// // Helper to get the next day (UTC-aware)
-// const getNextDay = (date) => {
-//   if (!date) return null;
-//   const next = new Date(date);
-//   next.setUTCDate(next.getUTCDate() + 1);
-//   return next;
-// };
 
 
 
@@ -238,7 +321,7 @@ try {
       }
     }
   });
-  
+
   // Convert main trip dates from string to Date objects if they are strings
   if (updates.startDate) trip.startDate = new Date(updates.startDate);
   if (updates.endDate) trip.endDate = new Date(updates.endDate);
@@ -253,11 +336,12 @@ try {
       let currentDate = new Date(updates.startDate);
       const sortedItinerary = [...updates.itinerary].sort((a, b) => a.index - b.index);
 
+
       newItinerary = await Promise.all(sortedItinerary.map(async (item) => {
         // Geocode the location
       
         let geoLocation = item.geoLocation || null;
-        let itemStartDate,itemEndDate;
+        let itemStartDate = null ,itemEndDate = null;
       
       // Only fetch if lat or lng is missing
       if (!geoLocation || geoLocation.lat == '' || geoLocation.lng == '') {
@@ -271,11 +355,6 @@ try {
             geoLocation = { lat: coords.lat, lng: coords.lng };
           }
 
-          // Calculate start and end dates
-          itemStartDate = new Date(currentDate);
-          itemEndDate = new Date(itemStartDate);
-          itemEndDate.setDate(itemEndDate.getDate() + (item.days || 0) - 1); // 1-day item ends same day
-
 
         } catch (geoErr) {
           console.warn(
@@ -285,6 +364,12 @@ try {
           geoLocation = null;
         }
       }
+
+      // Calculate start and end dates
+      itemStartDate = new Date(currentDate);
+      itemEndDate = new Date(itemStartDate);
+      itemEndDate.setDate(itemEndDate.getDate() + (item.days || 0) - 1); // 1-day item ends same day
+
       
         // Prepare updated item
         const updatedItem = {
@@ -331,14 +416,18 @@ try {
 }
 });
 
-// DELETE: Delete trip
-router.delete("/:id", authMiddleware, validateOwnership, async (req, res) => {
+router.put('/:id/cancel', authMiddleware, async (req, res) => {
   try {
-    await req.trip.deleteOne();
-    res.status(200).json({ message: "Trip deleted successfully" });
+    const trip = await Trip.findByIdAndUpdate(
+      req.params.id,
+      { status: 'cancelled' },
+      { new: true }
+    );
+
+    if (!trip) return res.status(404).json({ message: 'Trip not found' });
+    res.json(trip);
   } catch (err) {
-    console.error(err.message);
-    sendError(res, 500, "Error deleting trip", err.message);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

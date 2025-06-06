@@ -49,7 +49,7 @@ const tripSchema = new mongoose.Schema({
   },
   privacy: {
     type: String,
-    enum: ['public', 'private', 'unlisted'],
+    enum: ['public', 'private'],
     default: 'public',
     required: true
   },
