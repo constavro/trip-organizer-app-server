@@ -55,8 +55,6 @@ const tripSchema = new mongoose.Schema({
   },
   cancellationPolicy: { type: String },
   bookingDeadline: { type: Date },
-  expenses: [{ type: mongoose.Schema.Types.ObjectId, ref: "Expense" }],
-  chat: [{ type: mongoose.Schema.Types.ObjectId, ref: "Message" }],
 }, { timestamps: true });
 
 module.exports = mongoose.model('Trip', tripSchema);

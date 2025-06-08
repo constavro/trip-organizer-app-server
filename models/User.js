@@ -6,7 +6,7 @@ const userSchema = new mongoose.Schema({
     lastName: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    isConfirmed: { type: Boolean, default: true }, //CHANGE TO FALSE WHEN DEVELOPMENT IS OVER
+    isConfirmed: { type: Boolean, default: false }, //CHANGE TO FALSE WHEN DEVELOPMENT IS OVER
     createdAt: { type: Date, default: Date.now },
     resetPasswordToken: { type: String }, // Token for password reset
     resetPasswordExpires: { type: Date }, // Expiry time for the token

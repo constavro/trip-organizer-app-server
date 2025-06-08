@@ -8,6 +8,10 @@ const {
   getPagination,
   generateAITrip,
 } = require("../utils/tripUtils");
+const upload = require('../utils/uploadPhoto'); // Multer middleware
+const { uploadFileToBlob, deleteBlob, getBlobNameFromUrl } = require('../utils/azureBlobService'); // Azure service
+const path = require('path'); // path is still used for generating blob names if needed, fs is removed as it's not used for file system operations for user photos.
+const { updateTripStatus } = require('../utils/updateTripStatus')
 
 const OPENCAGE_API_KEY = "326c5582aa4f4768a94cb809b894f1ff"
 
@@ -15,6 +19,7 @@ const OPENCAGE_API_KEY = "326c5582aa4f4768a94cb809b894f1ff"
 
 // GET: All trips with pagination and filters
 router.get("/", async (req, res) => {
+  const result = await updateTripStatus();
   const { page, limit: queryLimit, skip } = getPagination(req, { defaultLimit: 6 }); // Default limit for general list
   const {
     tags, // Comma-separated string
@@ -403,6 +408,26 @@ try {
     trip.status = 'open';
   }
 
+      // Handle photo deletions if photos array is explicitly managed
+      if (updates.photos !== undefined && Array.isArray(updates.photos)) {
+        const oldPhotos = trip.photos || [];
+        const newPhotos = updates.photos; // These are expected to be Azure URLs
+  
+        const removedPhotoUrls = oldPhotos.filter(oldUrl => !newPhotos.includes(oldUrl));
+  
+        for (const photoUrl of removedPhotoUrls) {
+          const blobName = getBlobNameFromUrl(photoUrl);
+          if (blobName) {
+            try {
+              await deleteBlob(blobName);
+            } catch (deleteError) {
+              console.error(`Failed to delete photo ${blobName} from Azure:`, deleteError.message);
+              // Decide if you want to stop the update or just log the error
+            }
+          }
+        }
+      }
+
 
   const updatedTrip = await trip.save();
   res.json(updatedTrip);
@@ -414,6 +439,56 @@ try {
   }
   res.status(500).json({ message: 'Server error while updating trip', error: error.message });
 }
+});
+
+// Generic photo upload (e.g., for user's photo gallery)
+router.post('/upload-photo', authMiddleware, upload.single('photo'), async (req, res) => {
+
+  console.log(req.body)
+
+  if (req.fileValidationError) {
+    return res.status(400).json({ error: req.fileValidationError });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  try {
+    const originalName = req.file.originalname;
+    const extension = path.extname(originalName);
+    // Blob name includes a path-like structure for organization
+    const blobName = `trips/${req.user.id}/${Date.now()}-${path.basename(originalName, extension)}${extension}`;
+    
+    const photoUrl = await uploadFileToBlob(req.file.buffer, blobName, req.file.mimetype);
+
+    res.status(200).json({ message: 'Photo uploaded', path: photoUrl });
+  } catch (err) {
+    console.error('Error uploading photo to Azure:', err);
+    res.status(500).json({ error: 'Failed to upload photo', details: err.message });
+  }
+});
+
+// Delete a specific photo (e.g., from user's photo gallery)
+router.delete('/delete-photos', authMiddleware, async (req, res) => {
+  const { photoUrl } = req.body; // Expecting the full Azure Blob URL
+
+  if (!photoUrl) {
+    return res.status(400).json({ message: 'Photo URL is required' });
+  }
+
+  try {
+    const blobName = getBlobNameFromUrl(photoUrl);
+    if (!blobName) {
+      return res.status(400).json({ message: 'Invalid photo URL provided' });
+    }
+
+    await deleteBlob(blobName);
+
+    res.status(200).json({ message: 'Photo deleted successfully from Azure', removedPath: photoUrl });
+  } catch (err) {
+    console.error('Error deleting photo from Azure:', err);
+    res.status(500).json({ message: 'Failed to delete photo from Azure', error: err.message });
+  }
 });
 
 router.put('/:id/cancel', authMiddleware, async (req, res) => {
