@@ -12,8 +12,10 @@ const upload = require('../utils/uploadPhoto'); // Multer middleware
 const { uploadFileToBlob, deleteBlob, getBlobNameFromUrl } = require('../utils/azureBlobService'); // Azure service
 const path = require('path'); // path is still used for generating blob names if needed, fs is removed as it's not used for file system operations for user photos.
 const { updateTripStatus } = require('../utils/updateTripStatus')
+const dotenv = require('dotenv');
 
-const OPENCAGE_API_KEY = "326c5582aa4f4768a94cb809b894f1ff"
+dotenv.config();
+const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY
 
 // ======================== ROUTES ==========================
 
