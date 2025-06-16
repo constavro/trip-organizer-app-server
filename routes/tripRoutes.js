@@ -38,7 +38,7 @@ router.get("/", async (req, res) => {
   try {
     const filter = {
       privacy: 'public',
-      status: { $nin: ['inProgress', 'completed', 'cancelled'] }
+      status: { $nin: ['inProgress', 'completed','full' ,'cancelled'] }
     };
     
 
